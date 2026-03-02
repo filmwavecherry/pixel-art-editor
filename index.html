@@ -4,20 +4,56 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Pixel Art Editor</title>
-  <style>
-    body {
-      margin: 0;
-      background: #1a1a1a;
-      color: #f0f0f0;
-      font-family: monospace;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-    }
-  </style>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Hello World</h1>
+
+  <div id="upload-area">
+    <input type="file" id="file-input" accept="image/*" hidden>
+    <p>Drop an image here</p>
+    <p>or <button id="browse-btn">browse</button></p>
+  </div>
+
+  <div id="app" hidden>
+    <div id="canvas-container">
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="controls">
+      <label>
+        <div class="label-header"><span>Pixel size</span><span id="pixel-size-val">8</span></div>
+        <input type="range" id="pixel-size" min="0" max="100" value="40">
+      </label>
+      <label>
+        <div class="label-header"><span>Brightness</span><span id="brightness-val">0</span></div>
+        <input type="range" id="brightness" min="-100" max="100" value="0">
+      </label>
+      <label>
+        <div class="label-header"><span>Contrast</span><span id="contrast-val">0</span></div>
+        <input type="range" id="contrast" min="-100" max="100" value="0">
+      </label>
+      <label>
+        <div class="label-header"><span>Saturation</span><span id="saturation-val">0</span></div>
+        <input type="range" id="saturation" min="-100" max="300" value="0">
+      </label>
+      <label>
+        <div class="label-header"><span>Temperature</span><span id="temperature-val">0</span></div>
+        <input type="range" id="temperature" min="-100" max="100" value="0">
+      </label>
+      <label>
+        <div class="label-header"><span>Tint</span><span id="tint-val">0</span></div>
+        <input type="range" id="tint" min="-100" max="100" value="0">
+      </label>
+
+      <button id="reset-btn">Reset edits</button>
+
+      <div id="controls-buttons">
+        <button id="change-image-btn">Change image</button>
+        <button id="download-btn">Download PNG</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
