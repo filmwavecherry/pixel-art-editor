@@ -12,7 +12,7 @@ let videoDuration = 0, videoMode = false; // videoDuration = full raw duration
 let trimStart = 0, trimEnd = 0;
 let rafId = null, lastFrameTime = 0, targetInterval = 1000 / DEFAULT_FPS;
 let frameCanvas = null, frameCtx = null;
-let isDraggingPlayback = false;
+let trimDragMode = null, trimDragWindowOffset = 0;
 
 const settings = {
   pixelSize: 8,
@@ -137,7 +137,7 @@ function loadVideo(file) {
   videoEl.preload = 'auto';
   videoEl.src = videoObjectURL;
 
-  // Re-render current frame whenever the video seeks while paused
+  // Re-render current frame on seek while paused
   videoEl.addEventListener('seeked', () => {
     if (videoEl.paused) renderVideoFrame();
   });
@@ -155,7 +155,6 @@ function loadVideo(file) {
 
     trimStart = 0;
     trimEnd = Math.min(videoDuration, MAX_CLIP_DURATION_SEC);
-
     videoEl.currentTime = trimStart;
 
     videoMode = true;
@@ -165,7 +164,6 @@ function loadVideo(file) {
     changeFileBtn.textContent = 'Change file';
     downloadBtn.textContent = 'Download MP4';
 
-    updateTrimUI();
     updatePlaybackBar();
     videoEl.play();
     startVideoLoop();
@@ -183,7 +181,7 @@ function resetImageState() {
 
 function resetVideoState() {
   stopVideoLoop();
-  isDraggingPlayback = false;
+  trimDragMode = null;
   if (videoEl) {
     videoEl.pause();
     videoEl.src = '';
@@ -425,7 +423,6 @@ function renderVideoFrame() {
   sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
   const pixData = pixelate();
   renderToCanvas(pixData);
-  updateTrimPlayhead();
   updatePlaybackBar();
 }
 
@@ -442,41 +439,26 @@ function formatTime(s) {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
-// Updates the trim track in the sidebar (represents full video, selection = trim window)
-function updateTrimUI() {
-  const startPct = videoDuration > 0 ? (trimStart / videoDuration) * 100 : 0;
-  const endPct   = videoDuration > 0 ? (trimEnd   / videoDuration) * 100 : 100;
-
-  document.getElementById('trim-start-input').value = startPct;
-  document.getElementById('trim-end-input').value   = endPct;
-
-  const sel = document.getElementById('trim-selection');
-  sel.style.left  = startPct + '%';
-  sel.style.width = (endPct - startPct) + '%';
-
-  document.getElementById('trim-time-display').textContent =
-    `${formatTime(trimStart)} – ${formatTime(trimEnd)}`;
-}
-
-// Moves the orange playhead on the trim track to show current position in full video
-function updateTrimPlayhead() {
-  if (!videoEl || videoDuration <= 0) return;
-  const pct = Math.min(Math.max(videoEl.currentTime / videoDuration, 0), 1) * 100;
-  document.getElementById('trim-playhead').style.left = pct + '%';
-}
-
-// Updates the playback scrubber below the canvas (position within trim window)
+// Updates the unified playback bar: trim window, playhead, time display
 function updatePlaybackBar() {
-  if (!videoEl) return;
-  const clipDur = trimEnd - trimStart;
-  const pos = clipDur > 0 ? (videoEl.currentTime - trimStart) / clipDur : 0;
-  const pct = Math.min(Math.max(pos, 0), 1) * 100;
+  if (!videoEl || !videoDuration) return;
 
-  document.getElementById('playback-fill').style.width = pct + '%';
-  document.getElementById('playback-thumb').style.left = pct + '%';
+  const startPct = (trimStart / videoDuration) * 100;
+  const endPct   = (trimEnd   / videoDuration) * 100;
+  const nowPct   = Math.min(Math.max(videoEl.currentTime / videoDuration, 0), 1) * 100;
+
+  document.getElementById('pb-trim-selection').style.left  = startPct + '%';
+  document.getElementById('pb-trim-selection').style.width = (endPct - startPct) + '%';
+  document.getElementById('pb-trim-start-handle').style.left = startPct + '%';
+  document.getElementById('pb-trim-end-handle').style.left   = endPct + '%';
+  document.getElementById('pb-playhead').style.left = nowPct + '%';
+
+  const clipDur = trimEnd - trimStart;
   document.getElementById('playback-time').textContent =
-    formatTime(videoEl.currentTime - trimStart) + ' / ' + formatTime(clipDur);
+    formatTime(Math.max(videoEl.currentTime - trimStart, 0)) + ' / ' + formatTime(clipDur);
   document.getElementById('playback-pause-btn').textContent = videoEl.paused ? '▶' : '⏸';
+  document.getElementById('trim-time-display').textContent =
+    formatTime(trimStart) + ' – ' + formatTime(trimEnd);
 }
 
 // --- FPS mapping ---
@@ -719,30 +701,14 @@ changeFileBtn.addEventListener('click', () => {
   fileInput.value = '';
 });
 
-// --- Trim controls ---
-// The trim track represents the full video. Handles enforce max 30s window.
-const trimStartInput = document.getElementById('trim-start-input');
-const trimEndInput   = document.getElementById('trim-end-input');
+// --- Unified playback bar drag (trim handles + window slide + seek) ---
 const minGap = 1 / DEFAULT_FPS;
+const HANDLE_HIT_PX = 10;
 
-trimStartInput.addEventListener('input', () => {
-  const pct = parseFloat(trimStartInput.value);
-  let t = (pct / 100) * videoDuration;
-  t = Math.max(t, trimEnd - MAX_CLIP_DURATION_SEC); // window can't exceed 30s
-  t = Math.min(t, trimEnd - minGap);                // can't cross trimEnd
-  trimStart = Math.max(0, t);
-  updateTrimUI();
-  if (videoEl) videoEl.currentTime = trimStart; // seeked listener re-renders if paused
-});
-
-trimEndInput.addEventListener('input', () => {
-  const pct = parseFloat(trimEndInput.value);
-  let t = (pct / 100) * videoDuration;
-  t = Math.min(t, trimStart + MAX_CLIP_DURATION_SEC); // window can't exceed 30s
-  t = Math.max(t, trimStart + minGap);                // can't cross trimStart
-  trimEnd = Math.min(videoDuration, t);
-  updateTrimUI();
-});
+function getTrackFraction(e) {
+  const rect = playbackTrack.getBoundingClientRect();
+  return Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+}
 
 // --- Playback bar ---
 document.getElementById('playback-pause-btn').addEventListener('click', () => {
@@ -757,19 +723,30 @@ document.getElementById('playback-pause-btn').addEventListener('click', () => {
   updatePlaybackBar();
 });
 
-function seekFromPlaybackEvent(e) {
-  if (!videoEl || !videoDuration) return;
-  const rect = playbackTrack.getBoundingClientRect();
-  const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-  videoEl.currentTime = trimStart + pct * (trimEnd - trimStart);
-  // If playing, RAF handles re-render. If paused, the 'seeked' listener handles it.
-}
-
 playbackTrack.addEventListener('mousedown', (e) => {
-  if (!videoMode || !videoEl) return;
-  isDraggingPlayback = true;
-  seekFromPlaybackEvent(e);
-  e.stopPropagation(); // don't start canvas pan
+  if (!videoMode || !videoDuration) return;
+  e.stopPropagation();
+
+  const rect = playbackTrack.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const frac = x / rect.width;
+  const startFrac = trimStart / videoDuration;
+  const endFrac   = trimEnd   / videoDuration;
+  const startPx   = startFrac * rect.width;
+  const endPx     = endFrac   * rect.width;
+
+  if (Math.abs(x - startPx) <= HANDLE_HIT_PX) {
+    trimDragMode = 'start';
+  } else if (Math.abs(x - endPx) <= HANDLE_HIT_PX) {
+    trimDragMode = 'end';
+  } else if (frac >= startFrac && frac <= endFrac) {
+    trimDragMode = 'window';
+    trimDragWindowOffset = frac - startFrac;
+  } else {
+    trimDragMode = 'seek';
+    videoEl.currentTime = Math.min(Math.max(frac * videoDuration, 0), videoDuration);
+    updatePlaybackBar();
+  }
 });
 
 // --- Zoom ---
@@ -844,10 +821,35 @@ canvasContainer.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (isDraggingPlayback) {
-    seekFromPlaybackEvent(e);
+  if (trimDragMode) {
+    const frac = getTrackFraction(e);
+    const windowSize = trimEnd - trimStart;
+
+    if (trimDragMode === 'start') {
+      let t = frac * videoDuration;
+      t = Math.max(0, Math.min(t, trimEnd - minGap));
+      t = Math.max(t, trimEnd - MAX_CLIP_DURATION_SEC);
+      trimStart = t;
+      if (videoEl && videoEl.paused) videoEl.currentTime = trimStart;
+    } else if (trimDragMode === 'end') {
+      let t = frac * videoDuration;
+      t = Math.min(videoDuration, Math.max(t, trimStart + minGap));
+      t = Math.min(t, trimStart + MAX_CLIP_DURATION_SEC);
+      trimEnd = t;
+    } else if (trimDragMode === 'window') {
+      let newStart = (frac - trimDragWindowOffset) * videoDuration;
+      newStart = Math.max(0, Math.min(newStart, videoDuration - windowSize));
+      trimStart = newStart;
+      trimEnd = newStart + windowSize;
+      if (videoEl && videoEl.paused) videoEl.currentTime = trimStart;
+    } else if (trimDragMode === 'seek') {
+      videoEl.currentTime = Math.min(Math.max(frac * videoDuration, 0), videoDuration);
+    }
+
+    updatePlaybackBar();
     return;
   }
+
   if (!isPanning) return;
   const dx = e.clientX - panStartX;
   const dy = e.clientY - panStartY;
@@ -858,10 +860,11 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', () => {
-  if (isDraggingPlayback) {
-    isDraggingPlayback = false;
+  if (trimDragMode) {
+    trimDragMode = null;
     return;
   }
+
   if (!isPanning) return;
   isPanning = false;
   canvasContainer.classList.remove('panning');

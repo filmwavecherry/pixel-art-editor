@@ -241,44 +241,43 @@ body {
 #playback-track {
   flex: 1;
   position: relative;
-  height: 18px;
+  height: 26px;
+  background: #1a1a1a;
+  border-radius: 3px;
   cursor: pointer;
 }
 
-#playback-rail {
+#pb-trim-selection {
   position: absolute;
-  top: 50%;
-  left: 0;
-  width: 100%;
-  height: 3px;
-  background: #333;
+  top: 0;
+  height: 100%;
+  background: #2e2e2e;
   border-radius: 2px;
-  transform: translateY(-50%);
   pointer-events: none;
 }
 
-#playback-fill {
+#pb-trim-start-handle,
+#pb-trim-end-handle {
   position: absolute;
-  top: 50%;
-  left: 0;
-  width: 0%;
-  height: 3px;
-  background: #aaa;
+  top: 0;
+  width: 5px;
+  height: 100%;
+  background: #888;
   border-radius: 2px;
-  transform: translateY(-50%);
-  pointer-events: none;
+  z-index: 3;
+  cursor: ew-resize;
+  transform: translateX(-50%);
 }
 
-#playback-thumb {
+#pb-playhead {
   position: absolute;
-  top: 50%;
-  left: 0%;
-  width: 10px;
-  height: 10px;
-  background: #fff;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: #f90;
+  z-index: 2;
   pointer-events: none;
+  transform: translateX(-1px);
 }
 
 #playback-time {
@@ -330,6 +329,8 @@ body {
   height: 100%;
   background: #444;
   border-radius: 3px;
+  z-index: 1;
+  cursor: grab;
   pointer-events: none;
 }
 
@@ -343,38 +344,22 @@ body {
   transform: translateX(-1px);
 }
 
-#trim-track input[type="range"] {
+
+#trim-start-handle,
+#trim-end-handle {
   position: absolute;
   top: 0;
-  left: 0;
-  width: 100%;
+  width: 5px;
   height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-  pointer-events: none;
-}
-
-#trim-track input[type="range"]::-webkit-slider-thumb {
-  pointer-events: all;
-  width: 10px;
-  height: 24px;
+  background: #aaa;
+  border-radius: 2px;
   cursor: ew-resize;
-}
-
-#trim-track input[type="range"]::-moz-range-thumb {
-  pointer-events: all;
-  width: 10px;
-  height: 24px;
-  cursor: ew-resize;
-}
-
-#trim-start-input {
-  z-index: 2;
-}
-
-#trim-end-input {
   z-index: 3;
+  transform: translateX(-50%);
+}
+
+#trim-end-handle {
+  transform: translateX(-50%);
 }
 
 /* --- Download overlay --- */

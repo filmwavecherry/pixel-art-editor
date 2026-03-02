@@ -22,9 +22,10 @@
       <div id="playback-bar" hidden>
         <button id="playback-pause-btn">⏸</button>
         <div id="playback-track">
-          <div id="playback-rail"></div>
-          <div id="playback-fill"></div>
-          <div id="playback-thumb"></div>
+          <div id="pb-trim-selection"></div>
+          <div id="pb-trim-start-handle"></div>
+          <div id="pb-trim-end-handle"></div>
+          <div id="pb-playhead"></div>
         </div>
         <span id="playback-time">0:00 / 0:00</span>
       </div>
@@ -66,16 +67,9 @@
           <div class="label-header"><span>Framerate</span><span id="fps-val">12 fps</span></div>
           <input type="range" id="fps-slider" min="0" max="100" value="38">
         </label>
-        <div>
-          <div class="label-header"><span>Trim</span><span id="trim-time-display">0:00 – 0:30</span></div>
-          <div id="trim-timeline">
-            <div id="trim-track">
-              <div id="trim-selection"></div>
-              <div id="trim-playhead"></div>
-              <input type="range" id="trim-start-input" min="0" max="100" value="0" step="0.1">
-              <input type="range" id="trim-end-input" min="0" max="100" value="100" step="0.1">
-            </div>
-          </div>
+        <div class="label-header">
+          <span>Clip</span>
+          <span id="trim-time-display">0:00 – 0:30</span>
         </div>
       </div>
 
