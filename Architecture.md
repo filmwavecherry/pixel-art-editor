@@ -13,9 +13,10 @@ script.js     — all application logic
 
 ## Rendering pipeline
 1. **Load** — image: draw to offscreen canvas → extract `Uint8ClampedArray`. Video: hidden `<video>` element, never added to DOM.
-2. **Pixelate** — nearest-neighbor downscale with vivid color preservation: per-block, blend avg color toward most-chromatic pixel when chroma gap is large. Result: small `ImageData`.
+2. **Pixelate** — nearest-neighbor downscale: for each output block, sample the top-left source pixel. Result: small `ImageData`.
 3. **Color correct** — brightness/contrast/temperature/tint (linear), saturation (HSL). Returns new `ImageData`.
-4. **Render** — draw corrected data to offscreen canvas → scale up to display size via `drawImage` with `imageSmoothingEnabled = false` → blit to main canvas.
+4. **Quantize** (optional) — adaptive median-cut palette or named palette (Game Boy, Pico-8, CGA, NES). Each pixel mapped to nearest palette color via CIE Lab distance.
+5. **Render** — draw corrected data to offscreen canvas → scale up to display size via `drawImage` with `imageSmoothingEnabled = false` → blit to main canvas.
 
 Image mode caches pixelated data when pixel size unchanged. Video mode re-pixelates every frame (content always changes).
 
@@ -25,18 +26,23 @@ Image mode caches pixelated data when pixel size unchanged. Video mode re-pixela
 - Trim: video seeks to `trimStart` when `currentTime >= trimEnd`
 - Click canvas to pause/play (suppressed if mouse moved > 4px during mousedown)
 
-## MP4 export (ffmpeg.wasm)
-- Lazy-loaded on first export: `@ffmpeg/ffmpeg@0.12.10` + `@ffmpeg/core@0.12.10`
-- Single-threaded core (no SharedArrayBuffer / COOP-COEP headers needed)
-- Files fetched via `toBlobURL` from jsDelivr CDN, loaded into ffmpeg worker as blob: URLs
-- Frame extraction: seek to each timestamp → pixelate → color correct → scale up → `toBlob('image/png')` → write to ffmpeg virtual FS
-- Encode: `libx264 -pix_fmt yuv420p -crf 23 -movflags +faststart`
-- Progress bar: 0–50% extraction, 50–100% ffmpeg encode (via `progress` event)
+## MP4 export (WebCodecs)
+- Uses native browser `VideoEncoder` API — no external libraries loaded at runtime
+- `mp4-muxer` lazy-imported from jsDelivr CDN on first export
+- Frame loop: seek to each timestamp → pixelate → color correct → quantize → draw to output canvas → `VideoFrame` → `encoder.encode()`
+- Codec: H.264 High profile (`avc1.4d0028`), 4Mbps, H.264 requires even dimensions (padded if needed)
+- Progress bar updates per frame
+
+## Palette / quantization
+- `PALETTES` constant: named palettes with limited/extended variants
+- Adaptive palette: median-cut on pixelated frame data, vivid-color-biased representative selection per bucket
+- Video mode: palette sampled from 8 frames across the trim range and cached to prevent per-frame flicker
+- `getActivePalette()` returns the active palette array or null (no quantization)
 
 ## UI behavior
 - Upload area detects MIME type on drop/select → routes to `loadImage()` or `loadVideo()`
 - `#video-controls` hidden until a video is loaded; hidden again on "Change file"
-- Shared sliders (pixel size, color) always visible, work in both modes
+- Shared sliders (pixel size, color, palette) always visible, work in both modes
 - Reset button iterates `defaults` object — any key added to `defaults` resets automatically
 
 ## Zoom / pan

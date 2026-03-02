@@ -5,8 +5,9 @@ A web tool for turning images and videos into pixel art, with procedural animati
 
 ## Done: V1
 Pixel art tool in the browser. Upload image, pixelate, adjust colors, download PNG.
-- Nearest-neighbor pixelation with vivid color preservation
+- Nearest-neighbor pixelation (2–128px block size)
 - Brightness, contrast, saturation, temperature, tint controls
+- Color quantization with adaptive palette or named palettes (Game Boy, Pico-8, CGA, NES)
 - Zoom + pan canvas
 
 ## Done: V2
@@ -15,11 +16,11 @@ Video pixelation support.
 - Trim clip (dual-handle timeline, up to 30s)
 - Framerate control (1–30 fps)
 - Click canvas to pause/play
-- Download as MP4 via ffmpeg.wasm (frame-by-frame encode)
-- Shared controls (pixel size, color correction) work for both image and video
+- Download as MP4 via WebCodecs
+- Shared controls (pixel size, color correction, palette) work for both image and video
 
 ## Right now: V3
-Procedural animation effects for photos (snow, rain, leaves, birds). Exportable as GIF/MP4.
+Procedural animation effects for photos (snow, rain, leaves, birds). Exportable as MP4.
 
 Done when:
 - At least one procedural effect (e.g. snow) plays on top of a pixelated photo
