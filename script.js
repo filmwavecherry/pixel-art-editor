@@ -210,51 +210,11 @@ function pixelate() {
 
   for (let by = 0; by < outH; by++) {
     for (let bx = 0; bx < outW; bx++) {
-      let sumR = 0, sumG = 0, sumB = 0;
-      let maxChroma = 0;
-      let vividR = 0, vividG = 0, vividB = 0;
-      let count = 0;
-
-      const srcStartX = bx * blockSize;
-      const srcStartY = by * blockSize;
-
-      for (let py = 0; py < blockSize; py++) {
-        for (let px = 0; px < blockSize; px++) {
-          const sx = srcStartX + px;
-          const sy = srcStartY + py;
-          if (sx >= sourceWidth || sy >= sourceHeight) continue;
-
-          const i = (sy * sourceWidth + sx) * 4;
-          const r = sourcePixels[i];
-          const g = sourcePixels[i + 1];
-          const b = sourcePixels[i + 2];
-
-          sumR += r;
-          sumG += g;
-          sumB += b;
-
-          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-          if (chroma > maxChroma) {
-            maxChroma = chroma;
-            vividR = r;
-            vividG = g;
-            vividB = b;
-          }
-          count++;
-        }
-      }
-
-      const avgR = sumR / count;
-      const avgG = sumG / count;
-      const avgB = sumB / count;
-
-      const avgChroma = Math.max(avgR, avgG, avgB) - Math.min(avgR, avgG, avgB);
-      const blendFactor = Math.min(Math.max((maxChroma - avgChroma) / 80, 0), 1);
-
+      const i = (by * blockSize * sourceWidth + bx * blockSize) * 4;
       const outIdx = (by * outW + bx) * 4;
-      outData[outIdx]     = Math.round(avgR + (vividR - avgR) * blendFactor);
-      outData[outIdx + 1] = Math.round(avgG + (vividG - avgG) * blendFactor);
-      outData[outIdx + 2] = Math.round(avgB + (vividB - avgB) * blendFactor);
+      outData[outIdx]     = sourcePixels[i];
+      outData[outIdx + 1] = sourcePixels[i + 1];
+      outData[outIdx + 2] = sourcePixels[i + 2];
       outData[outIdx + 3] = 255;
     }
   }
@@ -640,9 +600,9 @@ uploadArea.addEventListener('drop', (e) => {
   handleFileUpload(e.dataTransfer.files[0]);
 });
 
-// Logarithmic mapping: slider 0–100 → pixel size 2–64
+// Logarithmic mapping: slider 0–100 → pixel size 2–128
 function sliderToPixelSize(v) {
-  return Math.round(2 * Math.pow(32, v / 100));
+  return Math.round(2 * Math.pow(64, v / 100));
 }
 
 let pixelSizeThrottleTimer = null;
