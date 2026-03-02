@@ -1,21 +1,33 @@
 # Roadmap
 
 ## What I'm building
-A web tool for turning images into pixel art with procedural animation effects.
+A web tool for turning images and videos into pixel art, with procedural animation effects for photos.
 
-## Right now: V1
-Get the pixel art tool working in a browser.
+## Done: V1
+Pixel art tool in the browser. Upload image, pixelate, adjust colors, download PNG.
+- Nearest-neighbor pixelation with vivid color preservation
+- Brightness, contrast, saturation, temperature, tint controls
+- Zoom + pan canvas
+
+## Done: V2
+Video pixelation support.
+- Upload video → live pixelated preview via Canvas RAF loop
+- Trim clip (dual-handle timeline, up to 30s)
+- Framerate control (1–30 fps)
+- Click canvas to pause/play
+- Download as MP4 via ffmpeg.wasm (frame-by-frame encode)
+- Shared controls (pixel size, color correction) work for both image and video
+
+## Right now: V3
+Procedural animation effects for photos (snow, rain, leaves, birds). Exportable as GIF/MP4.
 
 Done when:
-- It lives at a real URL
-- Someone can upload an image, see pixel art, and download it
-
-## Up next: V2
-Add snow effect on top of pixel art.
+- At least one procedural effect (e.g. snow) plays on top of a pixelated photo
+- User can export the result as MP4
 
 ## Later
-- More effects (rain, lights, birds, smoke)
-- Video support
+- Object detection for context-aware effects (blinking lights, smoke)
+- More environmental animation features
 
 ## Rules
 - Finish the current version before starting the next one

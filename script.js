@@ -6,6 +6,14 @@ let sourcePixels = null; // Uint8ClampedArray at full resolution
 let pixelatedData = null; // cached ImageData at small size
 let cachedPixelSize = -1;
 
+// --- Video state ---
+let videoEl = null, videoObjectURL = null;
+let videoDuration = 0, videoMode = false; // videoDuration = full raw duration
+let trimStart = 0, trimEnd = 0;
+let rafId = null, lastFrameTime = 0, targetInterval = 1000 / DEFAULT_FPS;
+let frameCanvas = null, frameCtx = null;
+let isDraggingPlayback = false;
+
 const settings = {
   pixelSize: 8,
   brightness: 0,
@@ -13,6 +21,7 @@ const settings = {
   saturation: 0,
   temperature: 0,
   tint: 0,
+  fps: DEFAULT_FPS,
 };
 
 const defaults = {
@@ -22,6 +31,7 @@ const defaults = {
   saturation: { slider: 0, value: 0 },
   temperature: { slider: 0, value: 0 },
   tint: { slider: 0, value: 0 },
+  fps: { slider: 38, value: DEFAULT_FPS },
 };
 
 // --- DOM refs ---
@@ -32,6 +42,9 @@ const app = document.getElementById('app');
 const canvasContainer = document.getElementById('canvas-container');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const changeFileBtn = document.getElementById('change-image-btn');
+const downloadBtn = document.getElementById('download-btn');
+const playbackTrack = document.getElementById('playback-track');
 
 // --- Zoom & pan state ---
 let zoomLevel = 1.0;
@@ -43,8 +56,6 @@ function applyTransform() {
   const cy = canvasContainer.clientHeight / 2 + panY;
   const hw = canvas.width  / 2;
   const hh = canvas.height / 2;
-  // translate to container center, scale, then offset by half canvas size
-  // result: canvas center sits at container center, zoom scales from there
   canvas.style.transform = `translate(${cx}px, ${cy}px) scale(${zoomLevel}) translate(${-hw}px, ${-hh}px)`;
 }
 
@@ -55,6 +66,7 @@ const sliders = {
   saturation: document.getElementById('saturation'),
   temperature: document.getElementById('temperature'),
   tint: document.getElementById('tint'),
+  fps: document.getElementById('fps-slider'),
 };
 
 const vals = {
@@ -64,18 +76,35 @@ const vals = {
   saturation: document.getElementById('saturation-val'),
   temperature: document.getElementById('temperature-val'),
   tint: document.getElementById('tint-val'),
+  fps: document.getElementById('fps-val'),
 };
+
+// --- Upload dispatcher ---
+function handleFileUpload(file) {
+  if (!file) return;
+  if (file.size / 1024 / 1024 > MAX_FILE_SIZE_MB) {
+    alert(`File too large. Max ${MAX_FILE_SIZE_MB}MB.`);
+    return;
+  }
+  if (file.type.startsWith('image/')) {
+    resetVideoState();
+    loadImage(file);
+  } else if (file.type.startsWith('video/')) {
+    resetImageState();
+    loadVideo(file);
+  } else {
+    alert('Unsupported file type.');
+  }
+}
 
 // --- Image loading ---
 function loadImage(file) {
-  if (!file || !file.type.startsWith('image/')) return;
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = () => {
     sourceWidth = img.naturalWidth;
     sourceHeight = img.naturalHeight;
 
-    // Extract full-resolution pixel data
     const offscreen = document.createElement('canvas');
     offscreen.width = sourceWidth;
     offscreen.height = sourceHeight;
@@ -85,16 +114,91 @@ function loadImage(file) {
 
     URL.revokeObjectURL(url);
 
-    // Reset cache and show UI
     pixelatedData = null;
     cachedPixelSize = -1;
 
     uploadArea.hidden = true;
     app.hidden = false;
+    showVideoControls(false);
+    changeFileBtn.textContent = 'Change file';
+    downloadBtn.textContent = 'Download PNG';
 
     render();
   };
   img.src = url;
+}
+
+// --- Video loading ---
+function loadVideo(file) {
+  videoObjectURL = URL.createObjectURL(file);
+
+  videoEl = document.createElement('video');
+  videoEl.muted = true;
+  videoEl.preload = 'auto';
+  videoEl.src = videoObjectURL;
+
+  // Re-render current frame whenever the video seeks while paused
+  videoEl.addEventListener('seeked', () => {
+    if (videoEl.paused) renderVideoFrame();
+  });
+
+  videoEl.addEventListener('loadedmetadata', () => {
+    videoDuration = videoEl.duration; // full, unclamped
+
+    sourceWidth = videoEl.videoWidth;
+    sourceHeight = videoEl.videoHeight;
+
+    frameCanvas = document.createElement('canvas');
+    frameCanvas.width = sourceWidth;
+    frameCanvas.height = sourceHeight;
+    frameCtx = frameCanvas.getContext('2d');
+
+    trimStart = 0;
+    trimEnd = Math.min(videoDuration, MAX_CLIP_DURATION_SEC);
+
+    videoEl.currentTime = trimStart;
+
+    videoMode = true;
+    uploadArea.hidden = true;
+    app.hidden = false;
+    showVideoControls(true);
+    changeFileBtn.textContent = 'Change file';
+    downloadBtn.textContent = 'Download MP4';
+
+    updateTrimUI();
+    updatePlaybackBar();
+    videoEl.play();
+    startVideoLoop();
+  });
+}
+
+// --- Reset state ---
+function resetImageState() {
+  sourcePixels = null;
+  sourceWidth = 0;
+  sourceHeight = 0;
+  pixelatedData = null;
+  cachedPixelSize = -1;
+}
+
+function resetVideoState() {
+  stopVideoLoop();
+  isDraggingPlayback = false;
+  if (videoEl) {
+    videoEl.pause();
+    videoEl.src = '';
+    videoEl = null;
+  }
+  if (videoObjectURL) {
+    URL.revokeObjectURL(videoObjectURL);
+    videoObjectURL = null;
+  }
+  videoDuration = 0;
+  videoMode = false;
+  trimStart = 0;
+  trimEnd = 0;
+  frameCanvas = null;
+  frameCtx = null;
 }
 
 // --- Pixelation ---
@@ -246,23 +350,15 @@ function applyColorCorrection(imageData) {
   return out;
 }
 
-// --- Render ---
-function render() {
-  if (!sourcePixels) return;
-
-  if (settings.pixelSize !== cachedPixelSize) {
-    pixelatedData = pixelate();
-    cachedPixelSize = settings.pixelSize;
-  }
-
-  const corrected = applyColorCorrection(pixelatedData);
+// --- Render (shared) ---
+function renderToCanvas(pixData) {
+  const corrected = applyColorCorrection(pixData);
 
   const small = document.createElement('canvas');
   small.width = corrected.width;
   small.height = corrected.height;
   small.getContext('2d').putImageData(corrected, 0, 0);
 
-  // Scale to fit 600×600 display
   const maxDisplay = 600;
   const aspect = corrected.width / corrected.height;
   let displayW, displayH;
@@ -281,7 +377,114 @@ function render() {
   applyTransform();
 }
 
-// --- Download ---
+function render() {
+  if (!sourcePixels) return;
+
+  if (settings.pixelSize !== cachedPixelSize) {
+    pixelatedData = pixelate();
+    cachedPixelSize = settings.pixelSize;
+  }
+
+  renderToCanvas(pixelatedData);
+}
+
+// --- Video RAF loop ---
+function rafLoop(now) {
+  rafId = requestAnimationFrame(rafLoop);
+
+  const elapsed = now - lastFrameTime;
+  if (elapsed < targetInterval) return;
+  lastFrameTime = now - (elapsed % targetInterval);
+
+  if (!videoEl || videoEl.paused || videoEl.readyState < 2) return;
+
+  if (videoEl.currentTime >= trimEnd) {
+    videoEl.currentTime = trimStart;
+    return;
+  }
+
+  renderVideoFrame();
+}
+
+function startVideoLoop() {
+  if (rafId) return;
+  lastFrameTime = 0;
+  rafId = requestAnimationFrame(rafLoop);
+}
+
+function stopVideoLoop() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+function renderVideoFrame() {
+  if (!videoEl || !frameCtx) return;
+  frameCtx.drawImage(videoEl, 0, 0);
+  sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
+  const pixData = pixelate();
+  renderToCanvas(pixData);
+  updateTrimPlayhead();
+  updatePlaybackBar();
+}
+
+// --- Video UI helpers ---
+function showVideoControls(show) {
+  document.getElementById('video-controls').hidden = !show;
+  document.getElementById('playback-bar').hidden = !show;
+}
+
+function formatTime(s) {
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+// Updates the trim track in the sidebar (represents full video, selection = trim window)
+function updateTrimUI() {
+  const startPct = videoDuration > 0 ? (trimStart / videoDuration) * 100 : 0;
+  const endPct   = videoDuration > 0 ? (trimEnd   / videoDuration) * 100 : 100;
+
+  document.getElementById('trim-start-input').value = startPct;
+  document.getElementById('trim-end-input').value   = endPct;
+
+  const sel = document.getElementById('trim-selection');
+  sel.style.left  = startPct + '%';
+  sel.style.width = (endPct - startPct) + '%';
+
+  document.getElementById('trim-time-display').textContent =
+    `${formatTime(trimStart)} – ${formatTime(trimEnd)}`;
+}
+
+// Moves the orange playhead on the trim track to show current position in full video
+function updateTrimPlayhead() {
+  if (!videoEl || videoDuration <= 0) return;
+  const pct = Math.min(Math.max(videoEl.currentTime / videoDuration, 0), 1) * 100;
+  document.getElementById('trim-playhead').style.left = pct + '%';
+}
+
+// Updates the playback scrubber below the canvas (position within trim window)
+function updatePlaybackBar() {
+  if (!videoEl) return;
+  const clipDur = trimEnd - trimStart;
+  const pos = clipDur > 0 ? (videoEl.currentTime - trimStart) / clipDur : 0;
+  const pct = Math.min(Math.max(pos, 0), 1) * 100;
+
+  document.getElementById('playback-fill').style.width = pct + '%';
+  document.getElementById('playback-thumb').style.left = pct + '%';
+  document.getElementById('playback-time').textContent =
+    formatTime(videoEl.currentTime - trimStart) + ' / ' + formatTime(clipDur);
+  document.getElementById('playback-pause-btn').textContent = videoEl.paused ? '▶' : '⏸';
+}
+
+// --- FPS mapping ---
+function sliderToFps(v) {
+  return Math.round(MIN_FPS + (MAX_FPS - MIN_FPS) * (v / 100));
+}
+
+// --- Download (image) ---
 function download() {
   if (!pixelatedData) return;
 
@@ -309,9 +512,132 @@ function download() {
   link.click();
 }
 
+// --- Download (video) ---
+function showDownloadOverlay(show, text) {
+  const overlay = document.getElementById('download-overlay');
+  overlay.hidden = !show;
+  if (text) document.getElementById('download-status-text').textContent = text;
+}
+
+function updateDownloadProgress(fraction) {
+  document.getElementById('download-progress-bar-fill').style.width =
+    Math.round(fraction * 100) + '%';
+}
+
+function seekTo(t) {
+  return new Promise(resolve => {
+    const onSeeked = () => { videoEl.removeEventListener('seeked', onSeeked); resolve(); };
+    videoEl.addEventListener('seeked', onSeeked);
+    videoEl.currentTime = t;
+  });
+}
+
+async function downloadMp4() {
+  if (!videoEl) return;
+
+  if (typeof VideoEncoder === 'undefined') {
+    alert('MP4 export requires WebCodecs (Chrome 94+). Try updating your browser.');
+    return;
+  }
+
+  stopVideoLoop();
+  showDownloadOverlay(true, 'Rendering frames...');
+
+  try {
+    const fps = settings.fps;
+    const clipDuration = trimEnd - trimStart;
+    const totalFrames = Math.max(1, Math.round(clipDuration * fps));
+
+    const blockSize = settings.pixelSize;
+    const pixW = Math.max(1, Math.floor(sourceWidth / blockSize));
+    const pixH = Math.max(1, Math.floor(sourceHeight / blockSize));
+    // H.264 requires even dimensions
+    const outW = pixW * blockSize + (pixW * blockSize % 2);
+    const outH = pixH * blockSize + (pixH * blockSize % 2);
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = outW;
+    outCanvas.height = outH;
+    const outCtx = outCanvas.getContext('2d');
+    outCtx.imageSmoothingEnabled = false;
+
+    const small = document.createElement('canvas');
+    small.width = pixW;
+    small.height = pixH;
+    const smallCtx = small.getContext('2d');
+
+    const { Muxer, ArrayBufferTarget } = await import(
+      'https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.mjs'
+    );
+
+    const target = new ArrayBufferTarget();
+    const muxer = new Muxer({
+      target,
+      video: { codec: 'avc', width: outW, height: outH },
+      fastStart: 'in-memory',
+    });
+
+    const encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => { throw e; },
+    });
+
+    encoder.configure({
+      codec: 'avc1.4d0028', // H.264 High profile
+      width: outW,
+      height: outH,
+      bitrate: 4_000_000,
+      framerate: fps,
+    });
+
+    for (let i = 0; i < totalFrames; i++) {
+      const t = Math.min(trimStart + i / fps, trimEnd - 1 / fps);
+      await seekTo(t);
+
+      frameCtx.drawImage(videoEl, 0, 0);
+      sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
+      const pixData = pixelate();
+      const corrected = applyColorCorrection(pixData);
+
+      smallCtx.putImageData(corrected, 0, 0);
+      outCtx.clearRect(0, 0, outW, outH);
+      outCtx.drawImage(small, 0, 0, outW, outH);
+
+      const timestamp = Math.round((i / fps) * 1_000_000); // microseconds
+      const frame = new VideoFrame(outCanvas, { timestamp });
+      encoder.encode(frame, { keyFrame: i % Math.max(1, fps * 2) === 0 });
+      frame.close();
+
+      updateDownloadProgress((i + 1) / totalFrames);
+    }
+
+    await encoder.flush();
+    muxer.finalize();
+
+    const blob = new Blob([target.buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = 'pixel-art.mp4';
+    link.href = url;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  } catch (err) {
+    console.error('MP4 export failed:', err);
+    alert('MP4 export failed. See console for details.');
+  } finally {
+    showDownloadOverlay(false);
+    if (videoEl) {
+      videoEl.currentTime = trimStart;
+      videoEl.play();
+      startVideoLoop();
+    }
+  }
+}
+
 // --- Events ---
 browseBtn.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => loadImage(fileInput.files[0]));
+fileInput.addEventListener('change', () => handleFileUpload(fileInput.files[0]));
 
 uploadArea.addEventListener('click', (e) => {
   if (e.target !== browseBtn) fileInput.click();
@@ -329,7 +655,7 @@ uploadArea.addEventListener('dragleave', () => {
 uploadArea.addEventListener('drop', (e) => {
   e.preventDefault();
   uploadArea.classList.remove('drag-over');
-  loadImage(e.dataTransfer.files[0]);
+  handleFileUpload(e.dataTransfer.files[0]);
 });
 
 // Logarithmic mapping: slider 0–100 → pixel size 2–64
@@ -345,7 +671,8 @@ sliders.pixelSize.addEventListener('input', () => {
   if (pixelSizeThrottleTimer) return;
   pixelSizeThrottleTimer = setTimeout(() => {
     pixelSizeThrottleTimer = null;
-    render();
+    if (!videoMode) render();
+    else if (videoEl && videoEl.paused) renderVideoFrame();
   }, 50);
 });
 
@@ -354,24 +681,95 @@ sliders.pixelSize.addEventListener('input', () => {
     const v = parseInt(sliders[key].value, 10);
     settings[key] = v;
     vals[key].textContent = v;
-    render();
+    if (!videoMode) render();
+    else if (videoEl && videoEl.paused) renderVideoFrame();
   });
 });
 
-document.getElementById('download-btn').addEventListener('click', download);
+sliders.fps.addEventListener('input', () => {
+  const fps = sliderToFps(parseInt(sliders.fps.value, 10));
+  settings.fps = fps;
+  vals.fps.textContent = fps + ' fps';
+  targetInterval = 1000 / fps;
+});
+
+downloadBtn.addEventListener('click', () => {
+  if (videoMode) downloadMp4();
+  else download();
+});
 
 document.getElementById('reset-btn').addEventListener('click', () => {
   Object.entries(defaults).forEach(([key, { slider, value }]) => {
     settings[key] = value;
-    sliders[key].value = slider;
-    vals[key].textContent = value;
+    if (sliders[key]) sliders[key].value = slider;
+    if (vals[key]) vals[key].textContent = key === 'fps' ? value + ' fps' : value;
   });
-  render();
+  targetInterval = 1000 / settings.fps;
+  if (!videoMode) render();
+  else if (videoEl && videoEl.paused) renderVideoFrame();
 });
 
-document.getElementById('change-image-btn').addEventListener('click', () => {
+changeFileBtn.addEventListener('click', () => {
+  stopVideoLoop();
+  resetVideoState();
+  resetImageState();
+  showVideoControls(false);
   uploadArea.hidden = false;
   app.hidden = true;
+  fileInput.value = '';
+});
+
+// --- Trim controls ---
+// The trim track represents the full video. Handles enforce max 30s window.
+const trimStartInput = document.getElementById('trim-start-input');
+const trimEndInput   = document.getElementById('trim-end-input');
+const minGap = 1 / DEFAULT_FPS;
+
+trimStartInput.addEventListener('input', () => {
+  const pct = parseFloat(trimStartInput.value);
+  let t = (pct / 100) * videoDuration;
+  t = Math.max(t, trimEnd - MAX_CLIP_DURATION_SEC); // window can't exceed 30s
+  t = Math.min(t, trimEnd - minGap);                // can't cross trimEnd
+  trimStart = Math.max(0, t);
+  updateTrimUI();
+  if (videoEl) videoEl.currentTime = trimStart; // seeked listener re-renders if paused
+});
+
+trimEndInput.addEventListener('input', () => {
+  const pct = parseFloat(trimEndInput.value);
+  let t = (pct / 100) * videoDuration;
+  t = Math.min(t, trimStart + MAX_CLIP_DURATION_SEC); // window can't exceed 30s
+  t = Math.max(t, trimStart + minGap);                // can't cross trimStart
+  trimEnd = Math.min(videoDuration, t);
+  updateTrimUI();
+});
+
+// --- Playback bar ---
+document.getElementById('playback-pause-btn').addEventListener('click', () => {
+  if (!videoEl) return;
+  if (videoEl.paused) {
+    videoEl.play();
+    startVideoLoop();
+  } else {
+    videoEl.pause();
+    stopVideoLoop();
+  }
+  updatePlaybackBar();
+});
+
+function seekFromPlaybackEvent(e) {
+  if (!videoEl || !videoDuration) return;
+  const rect = playbackTrack.getBoundingClientRect();
+  const pct = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+  videoEl.currentTime = trimStart + pct * (trimEnd - trimStart);
+  // If playing, RAF handles re-render. If paused, the 'seeked' listener handles it.
+}
+
+playbackTrack.addEventListener('mousedown', (e) => {
+  if (!videoMode || !videoEl) return;
+  isDraggingPlayback = true;
+  seekFromPlaybackEvent(e);
+  e.stopPropagation(); // don't start canvas pan
 });
 
 // --- Zoom ---
@@ -379,7 +777,6 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 10;
 const zoomSlider = document.getElementById('zoom-slider');
 
-// Slider 0–100 → zoom 50%–1000% (very logarithmic). At v=23 → ~100%.
 function sliderToZoom(v) {
   return 0.5 * Math.pow(20, v / 100);
 }
@@ -389,7 +786,6 @@ function zoomToSlider(z) {
 }
 
 function applyZoom(newZoom, originX, originY) {
-  // originX/Y: screen point to zoom toward (defaults to container center)
   const cx = canvasContainer.clientWidth  / 2;
   const cy = canvasContainer.clientHeight / 2;
   const ox = originX ?? cx;
@@ -398,7 +794,6 @@ function applyZoom(newZoom, originX, originY) {
   const prevZoom = zoomLevel;
   zoomLevel = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
 
-  // Adjust pan so the point under the cursor stays fixed
   const r = zoomLevel / prevZoom;
   panX = (ox - cx) * (1 - r) + panX * r;
   panY = (oy - cy) * (1 - r) + panY * r;
@@ -421,26 +816,26 @@ zoomSlider.addEventListener('input', (e) => {
 canvasContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
   if (e.ctrlKey) {
-    // Pinch to zoom — ctrlKey is how macOS trackpad sends pinch gestures
     const rect = canvasContainer.getBoundingClientRect();
     const ox = e.clientX - rect.left;
     const oy = e.clientY - rect.top;
     const factor = Math.pow(0.99, e.deltaY);
     applyZoom(zoomLevel * factor, ox, oy);
   } else {
-    // Two-finger scroll to pan
     panX -= e.deltaX;
     panY -= e.deltaY;
     applyTransform();
   }
 }, { passive: false });
 
-// --- Pan (drag) ---
+// --- Pan (drag) + click-to-pause ---
 let isPanning = false;
+let panMoved = false;
 let panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
 
 canvasContainer.addEventListener('mousedown', (e) => {
   isPanning = true;
+  panMoved = false;
   panStartX = e.clientX;
   panStartY = e.clientY;
   panOriginX = panX;
@@ -449,14 +844,35 @@ canvasContainer.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
+  if (isDraggingPlayback) {
+    seekFromPlaybackEvent(e);
+    return;
+  }
   if (!isPanning) return;
-  panX = panOriginX + (e.clientX - panStartX);
-  panY = panOriginY + (e.clientY - panStartY);
+  const dx = e.clientX - panStartX;
+  const dy = e.clientY - panStartY;
+  if (!panMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) panMoved = true;
+  panX = panOriginX + dx;
+  panY = panOriginY + dy;
   applyTransform();
 });
 
 window.addEventListener('mouseup', () => {
+  if (isDraggingPlayback) {
+    isDraggingPlayback = false;
+    return;
+  }
   if (!isPanning) return;
   isPanning = false;
   canvasContainer.classList.remove('panning');
+  if (!panMoved && videoMode && videoEl) {
+    if (videoEl.paused) {
+      videoEl.play();
+      startVideoLoop();
+    } else {
+      videoEl.pause();
+      stopVideoLoop();
+    }
+    updatePlaybackBar();
+  }
 });

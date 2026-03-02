@@ -9,8 +9,8 @@
 <body>
 
   <div id="upload-area">
-    <input type="file" id="file-input" accept="image/*" hidden>
-    <p>Drop an image here</p>
+    <input type="file" id="file-input" accept="image/*,video/*" hidden>
+    <p>Drop an image or video here</p>
     <p>or <button id="browse-btn">browse</button></p>
   </div>
 
@@ -18,6 +18,15 @@
     <div id="canvas-area">
       <div id="canvas-container">
         <canvas id="canvas"></canvas>
+      </div>
+      <div id="playback-bar" hidden>
+        <button id="playback-pause-btn">⏸</button>
+        <div id="playback-track">
+          <div id="playback-rail"></div>
+          <div id="playback-fill"></div>
+          <div id="playback-thumb"></div>
+        </div>
+        <span id="playback-time">0:00 / 0:00</span>
       </div>
       <div id="zoom-bar">
         <span id="zoom-display">100%</span>
@@ -52,15 +61,43 @@
         <input type="range" id="tint" min="-100" max="100" value="0">
       </label>
 
+      <div id="video-controls" hidden>
+        <label>
+          <div class="label-header"><span>Framerate</span><span id="fps-val">12 fps</span></div>
+          <input type="range" id="fps-slider" min="0" max="100" value="38">
+        </label>
+        <div>
+          <div class="label-header"><span>Trim</span><span id="trim-time-display">0:00 – 0:30</span></div>
+          <div id="trim-timeline">
+            <div id="trim-track">
+              <div id="trim-selection"></div>
+              <div id="trim-playhead"></div>
+              <input type="range" id="trim-start-input" min="0" max="100" value="0" step="0.1">
+              <input type="range" id="trim-end-input" min="0" max="100" value="100" step="0.1">
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button id="reset-btn">Reset edits</button>
 
       <div id="controls-buttons">
-        <button id="change-image-btn">Change image</button>
+        <button id="change-image-btn">Change file</button>
         <button id="download-btn">Download PNG</button>
       </div>
     </div>
   </div>
 
+  <div id="download-overlay" hidden>
+    <div id="download-progress-box">
+      <p id="download-status-text">Preparing...</p>
+      <div id="download-progress-bar-track">
+        <div id="download-progress-bar-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="constants.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
