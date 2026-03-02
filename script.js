@@ -29,8 +29,24 @@ const uploadArea = document.getElementById('upload-area');
 const fileInput = document.getElementById('file-input');
 const browseBtn = document.getElementById('browse-btn');
 const app = document.getElementById('app');
+const canvasContainer = document.getElementById('canvas-container');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+
+// --- Zoom & pan state ---
+let zoomLevel = 1.0;
+let panX = 0, panY = 0;
+const zoomDisplay = document.getElementById('zoom-display');
+
+function applyTransform() {
+  const cx = canvasContainer.clientWidth  / 2 + panX;
+  const cy = canvasContainer.clientHeight / 2 + panY;
+  const hw = canvas.width  / 2;
+  const hh = canvas.height / 2;
+  // translate to container center, scale, then offset by half canvas size
+  // result: canvas center sits at container center, zoom scales from there
+  canvas.style.transform = `translate(${cx}px, ${cy}px) scale(${zoomLevel}) translate(${-hw}px, ${-hh}px)`;
+}
 
 const sliders = {
   pixelSize: document.getElementById('pixel-size'),
@@ -189,7 +205,6 @@ function hslToRgb(h, s, l) {
   ];
 }
 
-
 function applyColorCorrection(imageData) {
   const { brightness, contrast, saturation, temperature, tint } = settings;
   const src = imageData.data;
@@ -197,32 +212,25 @@ function applyColorCorrection(imageData) {
   const dst = out.data;
   const contrastFactor = (100 + contrast) / 100;
   const satFactor = (100 + saturation) / 100;
-  // temperature: positive = warm (more R, less B), negative = cool (less R, more B)
   const tempShift = temperature * 0.5;
-  // tint: positive = green, negative = magenta
   const tintShift = tint * 0.5;
 
   for (let i = 0; i < src.length; i += 4) {
     let r = src[i], g = src[i + 1], b = src[i + 2];
 
-    // Brightness
     r += brightness;
     g += brightness;
     b += brightness;
 
-    // Contrast
     r = (r - 128) * contrastFactor + 128;
     g = (g - 128) * contrastFactor + 128;
     b = (b - 128) * contrastFactor + 128;
 
-    // Temperature
     r += tempShift;
     b -= tempShift;
 
-    // Tint
     g += tintShift;
 
-    // Saturation via HSL
     if (saturation !== 0) {
       const [h, s, l] = rgbToHsl(clamp(r), clamp(g), clamp(b));
       const newS = Math.min(Math.max(s * satFactor, 0), 1);
@@ -242,7 +250,6 @@ function applyColorCorrection(imageData) {
 function render() {
   if (!sourcePixels) return;
 
-  // Recompute pixelation only when pixel size changes
   if (settings.pixelSize !== cachedPixelSize) {
     pixelatedData = pixelate();
     cachedPixelSize = settings.pixelSize;
@@ -250,7 +257,6 @@ function render() {
 
   const corrected = applyColorCorrection(pixelatedData);
 
-  // Draw corrected small image to offscreen canvas
   const small = document.createElement('canvas');
   small.width = corrected.width;
   small.height = corrected.height;
@@ -272,6 +278,7 @@ function render() {
   canvas.height = displayH;
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(small, 0, 0, displayW, displayH);
+  applyTransform();
 }
 
 // --- Download ---
@@ -326,16 +333,20 @@ uploadArea.addEventListener('drop', (e) => {
 });
 
 // Logarithmic mapping: slider 0–100 → pixel size 2–64
-// At 0→2, at 40→8, at 50→11, at 100→64
 function sliderToPixelSize(v) {
   return Math.round(2 * Math.pow(32, v / 100));
 }
 
+let pixelSizeThrottleTimer = null;
 sliders.pixelSize.addEventListener('input', () => {
   const size = sliderToPixelSize(parseInt(sliders.pixelSize.value, 10));
   settings.pixelSize = size;
   vals.pixelSize.textContent = size;
-  render();
+  if (pixelSizeThrottleTimer) return;
+  pixelSizeThrottleTimer = setTimeout(() => {
+    pixelSizeThrottleTimer = null;
+    render();
+  }, 50);
 });
 
 ['brightness', 'contrast', 'saturation', 'temperature', 'tint'].forEach(key => {
@@ -361,4 +372,91 @@ document.getElementById('reset-btn').addEventListener('click', () => {
 document.getElementById('change-image-btn').addEventListener('click', () => {
   uploadArea.hidden = false;
   app.hidden = true;
+});
+
+// --- Zoom ---
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 10;
+const zoomSlider = document.getElementById('zoom-slider');
+
+// Slider 0–100 → zoom 50%–1000% (very logarithmic). At v=23 → ~100%.
+function sliderToZoom(v) {
+  return 0.5 * Math.pow(20, v / 100);
+}
+
+function zoomToSlider(z) {
+  return 100 * Math.log(z / 0.5) / Math.log(20);
+}
+
+function applyZoom(newZoom, originX, originY) {
+  // originX/Y: screen point to zoom toward (defaults to container center)
+  const cx = canvasContainer.clientWidth  / 2;
+  const cy = canvasContainer.clientHeight / 2;
+  const ox = originX ?? cx;
+  const oy = originY ?? cy;
+
+  const prevZoom = zoomLevel;
+  zoomLevel = Math.min(Math.max(newZoom, MIN_ZOOM), MAX_ZOOM);
+
+  // Adjust pan so the point under the cursor stays fixed
+  const r = zoomLevel / prevZoom;
+  panX = (ox - cx) * (1 - r) + panX * r;
+  panY = (oy - cy) * (1 - r) + panY * r;
+
+  zoomDisplay.textContent = Math.round(zoomLevel * 100) + '%';
+  zoomSlider.value = zoomToSlider(zoomLevel);
+  applyTransform();
+}
+
+document.getElementById('zoom-reset-btn').addEventListener('click', () => {
+  panX = 0;
+  panY = 0;
+  applyZoom(1);
+});
+
+zoomSlider.addEventListener('input', (e) => {
+  applyZoom(sliderToZoom(parseInt(e.target.value, 10)));
+});
+
+canvasContainer.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.ctrlKey) {
+    // Pinch to zoom — ctrlKey is how macOS trackpad sends pinch gestures
+    const rect = canvasContainer.getBoundingClientRect();
+    const ox = e.clientX - rect.left;
+    const oy = e.clientY - rect.top;
+    const factor = Math.pow(0.99, e.deltaY);
+    applyZoom(zoomLevel * factor, ox, oy);
+  } else {
+    // Two-finger scroll to pan
+    panX -= e.deltaX;
+    panY -= e.deltaY;
+    applyTransform();
+  }
+}, { passive: false });
+
+// --- Pan (drag) ---
+let isPanning = false;
+let panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
+
+canvasContainer.addEventListener('mousedown', (e) => {
+  isPanning = true;
+  panStartX = e.clientX;
+  panStartY = e.clientY;
+  panOriginX = panX;
+  panOriginY = panY;
+  canvasContainer.classList.add('panning');
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isPanning) return;
+  panX = panOriginX + (e.clientX - panStartX);
+  panY = panOriginY + (e.clientY - panStartY);
+  applyTransform();
+});
+
+window.addEventListener('mouseup', () => {
+  if (!isPanning) return;
+  isPanning = false;
+  canvasContainer.classList.remove('panning');
 });

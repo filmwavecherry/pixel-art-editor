@@ -15,8 +15,15 @@
   </div>
 
   <div id="app" hidden>
-    <div id="canvas-container">
-      <canvas id="canvas"></canvas>
+    <div id="canvas-area">
+      <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+      </div>
+      <div id="zoom-bar">
+        <span id="zoom-display">100%</span>
+        <input type="range" id="zoom-slider" min="0" max="100" value="23" step="1">
+        <button id="zoom-reset-btn" title="Reset zoom">↺</button>
+      </div>
     </div>
 
     <div id="controls">
