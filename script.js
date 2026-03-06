@@ -487,7 +487,9 @@ async function downloadMp4() {
 
   try {
     const fps = settings.fps;
-    const clipDuration = trimEnd - trimStart;
+    const exportStart = 0;
+    const exportEnd = videoDuration || (trimEnd - trimStart);
+    const clipDuration = exportEnd - exportStart;
     const totalFrames = Math.max(1, Math.round(clipDuration * fps));
 
     const blockSize = settings.pixelSize;
@@ -533,7 +535,7 @@ async function downloadMp4() {
     });
 
     for (let i = 0; i < totalFrames; i++) {
-      const t = Math.min(trimStart + i / fps, trimEnd - 1 / fps);
+      const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
       await seekTo(t);
 
       frameCtx.drawImage(videoEl, 0, 0);
