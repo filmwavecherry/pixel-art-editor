@@ -134,6 +134,7 @@ function loadVideo(file) {
 
   videoEl = document.createElement('video');
   videoEl.muted = true;
+  videoEl.playsInline = true;
   videoEl.preload = 'auto';
   videoEl.src = videoObjectURL;
 
@@ -497,7 +498,19 @@ async function downloadMp4() {
   if (!videoEl) return;
 
   if (typeof VideoEncoder === 'undefined') {
-    alert('MP4 export requires WebCodecs (Chrome 94+). Try updating your browser.');
+    alert('MP4 export is not supported in this browser. Try Chrome on desktop.');
+    return;
+  }
+
+  const codecSupport = await VideoEncoder.isConfigSupported({
+    codec: 'avc1.4d0028',
+    width: 2,
+    height: 2,
+    bitrate: 4_000_000,
+    framerate: 30,
+  });
+  if (!codecSupport.supported) {
+    alert('MP4 export is not supported in this browser. Try Chrome on desktop.');
     return;
   }
 
