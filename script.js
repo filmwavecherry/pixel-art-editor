@@ -426,6 +426,28 @@ function sliderToFps(v) {
   return Math.round(MIN_FPS + (MAX_FPS - MIN_FPS) * (v / 100));
 }
 
+// --- Save helper (Web Share API on mobile, anchor download on desktop) ---
+async function saveFile(blob, filename) {
+  if (navigator.canShare) {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        // fall through to anchor approach
+      }
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 // --- Download (image) ---
 function download() {
   if (!pixelatedData) return;
@@ -448,10 +470,7 @@ function download() {
   dlCtx.imageSmoothingEnabled = false;
   dlCtx.drawImage(small, 0, 0, outW, outH);
 
-  const link = document.createElement('a');
-  link.download = 'pixel-art.png';
-  link.href = dl.toDataURL('image/png');
-  link.click();
+  dl.toBlob(blob => saveFile(blob, 'pixel-art.png'), 'image/png');
 }
 
 // --- Download (video) ---
@@ -559,12 +578,7 @@ async function downloadMp4() {
     muxer.finalize();
 
     const blob = new Blob([target.buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = 'pixel-art.mp4';
-    link.href = url;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    await saveFile(blob, 'pixel-art.mp4');
 
   } catch (err) {
     console.error('MP4 export failed:', err);

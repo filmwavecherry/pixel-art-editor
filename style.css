@@ -406,3 +406,66 @@ body {
   border-radius: 2px;
   transition: width 0.1s linear;
 }
+
+/* --- Mobile layout (≤640px) --- */
+
+@media (max-width: 640px) {
+  #upload-area {
+    margin: 16px;
+  }
+
+  #upload-area button {
+    padding: 10px 20px;
+    font-size: 1rem;
+  }
+
+  #app {
+    flex-direction: column;
+  }
+
+  #canvas-area {
+    flex: 1;
+    min-height: 0;
+  }
+
+  #controls {
+    width: 100%;
+    max-height: 44vh;
+    border-left: none;
+    border-top: 1px solid #222;
+    padding: 12px 16px;
+    gap: 16px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 0;
+  }
+
+  #controls-buttons {
+    margin-top: 0;
+    flex-direction: row;
+  }
+
+  #controls input[type="range"] {
+    height: 28px;
+  }
+
+  #reset-btn,
+  #change-image-btn,
+  #download-btn {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+
+  #zoom-slider {
+    width: 140px;
+  }
+
+  #playback-track {
+    height: 32px;
+  }
+
+  #pb-trim-start-handle,
+  #pb-trim-end-handle {
+    width: 10px;
+  }
+}
