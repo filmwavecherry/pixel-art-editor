@@ -497,20 +497,24 @@ function seekTo(t) {
 async function downloadMp4() {
   if (!videoEl) return;
 
-  if (typeof VideoEncoder === 'undefined') {
-    alert('MP4 export is not supported in this browser. Try Chrome on desktop.');
-    return;
+  // Prefer WebCodecs (fast, Chrome/desktop). Fall back to MediaRecorder (real-time, iOS Safari).
+  let useWebCodecs = false;
+  if (typeof VideoEncoder !== 'undefined') {
+    const support = await VideoEncoder.isConfigSupported({
+      codec: 'avc1.4d0028', width: 2, height: 2, bitrate: 4_000_000, framerate: 30,
+    });
+    useWebCodecs = support.supported;
   }
 
-  const codecSupport = await VideoEncoder.isConfigSupported({
-    codec: 'avc1.4d0028',
-    width: 2,
-    height: 2,
-    bitrate: 4_000_000,
-    framerate: 30,
-  });
-  if (!codecSupport.supported) {
-    alert('MP4 export is not supported in this browser. Try Chrome on desktop.');
+  let mediaRecorderMime = null;
+  if (!useWebCodecs && typeof MediaRecorder !== 'undefined') {
+    for (const mime of ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
+      if (MediaRecorder.isTypeSupported(mime)) { mediaRecorderMime = mime; break; }
+    }
+  }
+
+  if (!useWebCodecs && !mediaRecorderMime) {
+    alert('Video export is not supported in this browser. Try Chrome on desktop.');
     return;
   }
 
@@ -542,60 +546,87 @@ async function downloadMp4() {
     small.height = pixH;
     const smallCtx = small.getContext('2d');
 
-    const { Muxer, ArrayBufferTarget } = await import(
-      'https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.mjs'
-    );
+    if (useWebCodecs) {
+      // --- WebCodecs path: fast, seek-based, Chrome/desktop ---
+      const { Muxer, ArrayBufferTarget } = await import(
+        'https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.mjs'
+      );
+      const target = new ArrayBufferTarget();
+      const muxer = new Muxer({
+        target,
+        video: { codec: 'avc', width: outW, height: outH },
+        fastStart: 'in-memory',
+      });
+      const encoder = new VideoEncoder({
+        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+        error: (e) => { throw e; },
+      });
+      encoder.configure({
+        codec: 'avc1.4d0028',
+        width: outW,
+        height: outH,
+        bitrate: 4_000_000,
+        framerate: fps,
+      });
 
-    const target = new ArrayBufferTarget();
-    const muxer = new Muxer({
-      target,
-      video: { codec: 'avc', width: outW, height: outH },
-      fastStart: 'in-memory',
-    });
+      for (let i = 0; i < totalFrames; i++) {
+        const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
+        await seekTo(t);
+        frameCtx.drawImage(videoEl, 0, 0);
+        sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
+        const pixData = pixelate();
+        const corrected = applyColorCorrection(pixData);
+        smallCtx.putImageData(corrected, 0, 0);
+        outCtx.clearRect(0, 0, outW, outH);
+        outCtx.drawImage(small, 0, 0, outW, outH);
+        const timestamp = Math.round((i / fps) * 1_000_000);
+        const frame = new VideoFrame(outCanvas, { timestamp });
+        encoder.encode(frame, { keyFrame: i % Math.max(1, fps * 2) === 0 });
+        frame.close();
+        updateDownloadProgress((i + 1) / totalFrames);
+      }
 
-    const encoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-      error: (e) => { throw e; },
-    });
+      await encoder.flush();
+      muxer.finalize();
+      const blob = new Blob([target.buffer], { type: 'video/mp4' });
+      await saveFile(blob, 'pixel-art.mp4');
 
-    encoder.configure({
-      codec: 'avc1.4d0028', // H.264 High profile
-      width: outW,
-      height: outH,
-      bitrate: 4_000_000,
-      framerate: fps,
-    });
+    } else {
+      // --- MediaRecorder path: real-time, iOS Safari / Firefox ---
+      const stream = outCanvas.captureStream(fps);
+      const chunks = [];
+      const recorder = new MediaRecorder(stream, { mimeType: mediaRecorderMime, videoBitsPerSecond: 4_000_000 });
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      const recordingDone = new Promise(resolve => {
+        recorder.onstop = () => resolve(new Blob(chunks, { type: mediaRecorderMime.split(';')[0] }));
+      });
 
-    for (let i = 0; i < totalFrames; i++) {
-      const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
-      await seekTo(t);
+      recorder.start();
+      const frameInterval = 1000 / fps;
 
-      frameCtx.drawImage(videoEl, 0, 0);
-      sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
-      const pixData = pixelate();
-      const corrected = applyColorCorrection(pixData);
+      for (let i = 0; i < totalFrames; i++) {
+        const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
+        await seekTo(t);
+        frameCtx.drawImage(videoEl, 0, 0);
+        sourcePixels = frameCtx.getImageData(0, 0, sourceWidth, sourceHeight).data;
+        const pixData = pixelate();
+        const corrected = applyColorCorrection(pixData);
+        smallCtx.putImageData(corrected, 0, 0);
+        outCtx.clearRect(0, 0, outW, outH);
+        outCtx.drawImage(small, 0, 0, outW, outH);
+        updateDownloadProgress((i + 1) / totalFrames);
+        await new Promise(r => setTimeout(r, frameInterval));
+      }
 
-      smallCtx.putImageData(corrected, 0, 0);
-      outCtx.clearRect(0, 0, outW, outH);
-      outCtx.drawImage(small, 0, 0, outW, outH);
-
-      const timestamp = Math.round((i / fps) * 1_000_000); // microseconds
-      const frame = new VideoFrame(outCanvas, { timestamp });
-      encoder.encode(frame, { keyFrame: i % Math.max(1, fps * 2) === 0 });
-      frame.close();
-
-      updateDownloadProgress((i + 1) / totalFrames);
+      recorder.stop();
+      const blob = await recordingDone;
+      const ext = mediaRecorderMime.startsWith('video/mp4') ? 'mp4' : 'webm';
+      await saveFile(blob, `pixel-art.${ext}`);
     }
 
-    await encoder.flush();
-    muxer.finalize();
-
-    const blob = new Blob([target.buffer], { type: 'video/mp4' });
-    await saveFile(blob, 'pixel-art.mp4');
-
   } catch (err) {
-    console.error('MP4 export failed:', err);
-    alert('MP4 export failed. See console for details.');
+    console.error('Video export failed:', err);
+    alert('Video export failed. See console for details.');
   } finally {
     showDownloadOverlay(false);
     if (videoEl) {
