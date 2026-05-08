@@ -165,6 +165,11 @@ function loadVideo(file) {
     changeFileBtn.textContent = 'Change file';
     downloadBtn.textContent = 'Download MP4';
 
+    // Update button label async once we know what format we can export
+    supportsWebCodecs().then(can => {
+      if (videoMode) downloadBtn.textContent = can ? 'Download MP4' : 'Export GIF';
+    });
+
     updatePlaybackBar();
     videoEl.play();
     startVideoLoop();
@@ -494,29 +499,18 @@ function seekTo(t) {
   });
 }
 
+async function supportsWebCodecs() {
+  if (typeof VideoEncoder === 'undefined') return false;
+  const s = await VideoEncoder.isConfigSupported({
+    codec: 'avc1.4d0028', width: 2, height: 2, bitrate: 4_000_000, framerate: 30,
+  });
+  return s.supported;
+}
+
 async function downloadMp4() {
   if (!videoEl) return;
 
-  // Prefer WebCodecs (fast, Chrome/desktop). Fall back to MediaRecorder (real-time, iOS Safari).
-  let useWebCodecs = false;
-  if (typeof VideoEncoder !== 'undefined') {
-    const support = await VideoEncoder.isConfigSupported({
-      codec: 'avc1.4d0028', width: 2, height: 2, bitrate: 4_000_000, framerate: 30,
-    });
-    useWebCodecs = support.supported;
-  }
-
-  let mediaRecorderMime = null;
-  if (!useWebCodecs && typeof MediaRecorder !== 'undefined') {
-    for (const mime of ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
-      if (MediaRecorder.isTypeSupported(mime)) { mediaRecorderMime = mime; break; }
-    }
-  }
-
-  if (!useWebCodecs && !mediaRecorderMime) {
-    alert('Video export is not supported in this browser. Try Chrome on desktop.');
-    return;
-  }
+  const useWebCodecs = await supportsWebCodecs();
 
   stopVideoLoop();
   showDownloadOverlay(true, 'Rendering frames...');
@@ -592,17 +586,13 @@ async function downloadMp4() {
       await saveFile(blob, 'pixel-art.mp4');
 
     } else {
-      // --- MediaRecorder path: real-time, iOS Safari / Firefox ---
-      const stream = outCanvas.captureStream(fps);
-      const chunks = [];
-      const recorder = new MediaRecorder(stream, { mimeType: mediaRecorderMime, videoBitsPerSecond: 4_000_000 });
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      const recordingDone = new Promise(resolve => {
-        recorder.onstop = () => resolve(new Blob(chunks, { type: mediaRecorderMime.split(';')[0] }));
-      });
+      // --- GIF path: pure JS, no special APIs needed, works on iOS ---
+      const { GIFEncoder, quantize, applyPalette } = await import(
+        'https://cdn.jsdelivr.net/npm/gifenc@1.0.1/dist/gifenc.esm.js'
+      );
 
-      recorder.start();
-      const frameInterval = 1000 / fps;
+      const encoder = GIFEncoder();
+      const delay = Math.round(1000 / fps);
 
       for (let i = 0; i < totalFrames; i++) {
         const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
@@ -614,14 +604,18 @@ async function downloadMp4() {
         smallCtx.putImageData(corrected, 0, 0);
         outCtx.clearRect(0, 0, outW, outH);
         outCtx.drawImage(small, 0, 0, outW, outH);
+
+        const rgba = outCtx.getImageData(0, 0, outW, outH).data;
+        const palette = quantize(rgba, 256);
+        const index = applyPalette(rgba, palette);
+        encoder.writeFrame(index, outW, outH, { palette, delay, repeat: 0 });
+
         updateDownloadProgress((i + 1) / totalFrames);
-        await new Promise(r => setTimeout(r, frameInterval));
       }
 
-      recorder.stop();
-      const blob = await recordingDone;
-      const ext = mediaRecorderMime.startsWith('video/mp4') ? 'mp4' : 'webm';
-      await saveFile(blob, `pixel-art.${ext}`);
+      encoder.finish();
+      const blob = new Blob([encoder.bytes()], { type: 'image/gif' });
+      await saveFile(blob, 'pixel-art.gif');
     }
 
   } catch (err) {
