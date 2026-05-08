@@ -165,11 +165,6 @@ function loadVideo(file) {
     changeFileBtn.textContent = 'Change file';
     downloadBtn.textContent = 'Download MP4';
 
-    // Update button label async once we know what format we can export
-    supportsWebCodecs().then(can => {
-      if (videoMode) downloadBtn.textContent = can ? 'Download MP4' : 'Export GIF';
-    });
-
     updatePlaybackBar();
     videoEl.play();
     startVideoLoop();
@@ -499,18 +494,30 @@ function seekTo(t) {
   });
 }
 
-async function supportsWebCodecs() {
-  if (typeof VideoEncoder === 'undefined') return false;
-  const s = await VideoEncoder.isConfigSupported({
-    codec: 'avc1.4d0028', width: 2, height: 2, bitrate: 4_000_000, framerate: 30,
-  });
-  return s.supported;
+// Returns a supported H.264 codec string, or null if WebCodecs encoding unavailable.
+// Tries multiple profiles because iOS Safari supports Baseline but not Main/High.
+async function getWebCodecsCodec() {
+  if (typeof VideoEncoder === 'undefined') return null;
+  const candidates = [
+    'avc1.4d0028', // Main L4.0 — Chrome default
+    'avc1.42E028', // Constrained Baseline L4.0 — iOS Safari
+    'avc1.42001f', // Baseline L3.1
+  ];
+  for (const codec of candidates) {
+    try {
+      const s = await VideoEncoder.isConfigSupported({
+        codec, width: 2, height: 2, bitrate: 4_000_000, framerate: 30,
+      });
+      if (s.supported) return codec;
+    } catch {}
+  }
+  return null;
 }
 
 async function downloadMp4() {
   if (!videoEl) return;
 
-  const useWebCodecs = await supportsWebCodecs();
+  const codec = await getWebCodecsCodec();
 
   stopVideoLoop();
   showDownloadOverlay(true, 'Rendering frames...');
@@ -540,8 +547,8 @@ async function downloadMp4() {
     small.height = pixH;
     const smallCtx = small.getContext('2d');
 
-    if (useWebCodecs) {
-      // --- WebCodecs path: fast, seek-based, Chrome/desktop ---
+    if (codec) {
+      // --- WebCodecs path: Chrome/desktop + iOS 17+ if Baseline supported ---
       const { Muxer, ArrayBufferTarget } = await import(
         'https://cdn.jsdelivr.net/npm/mp4-muxer@5/build/mp4-muxer.mjs'
       );
@@ -555,13 +562,7 @@ async function downloadMp4() {
         output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
         error: (e) => { throw e; },
       });
-      encoder.configure({
-        codec: 'avc1.4d0028',
-        width: outW,
-        height: outH,
-        bitrate: 4_000_000,
-        framerate: fps,
-      });
+      encoder.configure({ codec, width: outW, height: outH, bitrate: 4_000_000, framerate: fps });
 
       for (let i = 0; i < totalFrames; i++) {
         const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
@@ -586,13 +587,31 @@ async function downloadMp4() {
       await saveFile(blob, 'pixel-art.mp4');
 
     } else {
-      // --- GIF path: pure JS, no special APIs needed, works on iOS ---
-      const { GIFEncoder, quantize, applyPalette } = await import(
-        'https://cdn.jsdelivr.net/npm/gifenc@1.0.1/dist/gifenc.esm.js'
-      );
+      // --- ffmpeg.wasm path: pure WASM H.264 encoder, works on iOS ---
+      showDownloadOverlay(true, 'Loading encoder (~25 MB, cached after first use)...');
 
-      const encoder = GIFEncoder();
-      const delay = Math.round(1000 / fps);
+      const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+
+      async function fetchAsBlob(url, type) {
+        const buf = await fetch(url).then(r => r.arrayBuffer());
+        return URL.createObjectURL(new Blob([buf], { type }));
+      }
+
+      const ffmpeg = new FFmpeg();
+      ffmpeg.on('progress', ({ progress }) => updateDownloadProgress(0.8 + progress * 0.2));
+
+      await ffmpeg.load({
+        coreURL: await fetchAsBlob(
+          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
+          'text/javascript'
+        ),
+        wasmURL: await fetchAsBlob(
+          'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+          'application/wasm'
+        ),
+      });
+
+      showDownloadOverlay(true, 'Rendering frames...');
 
       for (let i = 0; i < totalFrames; i++) {
         const t = Math.min(exportStart + i / fps, exportEnd - 1 / fps);
@@ -605,17 +624,26 @@ async function downloadMp4() {
         outCtx.clearRect(0, 0, outW, outH);
         outCtx.drawImage(small, 0, 0, outW, outH);
 
-        const rgba = outCtx.getImageData(0, 0, outW, outH).data;
-        const palette = quantize(rgba, 256);
-        const index = applyPalette(rgba, palette);
-        encoder.writeFrame(index, outW, outH, { palette, delay, repeat: 0 });
-
-        updateDownloadProgress((i + 1) / totalFrames);
+        const pngBytes = await new Promise(resolve => {
+          outCanvas.toBlob(b => b.arrayBuffer().then(buf => resolve(new Uint8Array(buf))), 'image/png');
+        });
+        await ffmpeg.writeFile(`f${String(i).padStart(4, '0')}.png`, pngBytes);
+        updateDownloadProgress((i + 1) / totalFrames * 0.8);
       }
 
-      encoder.finish();
-      const blob = new Blob([encoder.bytes()], { type: 'image/gif' });
-      await saveFile(blob, 'pixel-art.gif');
+      showDownloadOverlay(true, 'Encoding...');
+      await ffmpeg.exec([
+        '-framerate', String(fps),
+        '-i', 'f%04d.png',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        'out.mp4',
+      ]);
+
+      const data = await ffmpeg.readFile('out.mp4');
+      const blob = new Blob([data.buffer], { type: 'video/mp4' });
+      await saveFile(blob, 'pixel-art.mp4');
     }
 
   } catch (err) {
